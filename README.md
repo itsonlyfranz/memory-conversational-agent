@@ -131,4 +131,4 @@ Run `pytest` (98 tests, ~3 seconds, no network).
 | Memory hygiene | `test_memory.py`: slot supersession, dedupe/reinforce, per-user isolation, forgetting, capacity eviction |
 | Offline LLM boundary | `test_llm.py` (request forwarding, error wrapping), `test_config.py`; every other test runs on fakes |
 
-Layout: `src/memory_agent/` (package), `tests/`, `pyproject.toml`, `.env.example`.
+Layout: `src/memory_agent/` (package), `tests/`, `scripts/` (README diagram generator), `pyproject.toml`, `.env.example`.
