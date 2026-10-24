@@ -1,17 +1,13 @@
 """Regenerate the README's agent-flow diagram from the compiled LangGraph turn graph.
 
-    python scripts/render_graph.py           # rewrite the diagram in README.md
-    python scripts/render_graph.py --check   # exit 1 if README.md is out of date
-    python scripts/render_graph.py --print   # print the Mermaid source only
+    python scripts/render_graph.py   # rewrite the diagram in README.md
 
 Fully offline: the graph is compiled with the fake LLM, so no API key is needed.
 """
 
 from __future__ import annotations
 
-import argparse
 import re
-import sys
 from pathlib import Path
 
 from memory_agent import (
@@ -46,24 +42,8 @@ def update_readme(text: str) -> str:
     return BLOCK.sub(lambda _: flow_block(), text)
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--check", action="store_true", help="fail if README.md is stale")
-    mode.add_argument("--print", action="store_true", help="print the Mermaid source")
-    args = parser.parse_args(argv)
-
-    if args.print:
-        print(render_flow_mermaid())
-        return 0
-    current = README.read_text(encoding="utf-8")
-    updated = update_readme(current)
-    if args.check:
-        if updated != current:
-            print("README.md flow diagram is stale; run scripts/render_graph.py", file=sys.stderr)
-            return 1
-        return 0
-    README.write_text(updated, encoding="utf-8")
+def main() -> int:
+    README.write_text(update_readme(README.read_text(encoding="utf-8")), encoding="utf-8")
     return 0
 
 

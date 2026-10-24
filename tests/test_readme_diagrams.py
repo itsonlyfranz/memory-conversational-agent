@@ -16,10 +16,6 @@ def test_readme_flow_diagram_matches_compiled_graph():
     )
 
 
-def test_render_graph_check_passes_on_current_readme():
-    assert render_graph.main(["--check"]) == 0
-
-
 def test_flow_diagram_contains_every_graph_node():
     source = render_graph.render_flow_mermaid()
     for node in ("recall", "generate", "update_buffer", "extract", "store"):
