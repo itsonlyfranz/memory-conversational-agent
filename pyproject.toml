@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "memory-conversational-agent"
+version = "0.1.0"
+description = "Conversational agent with short-term buffer, long-term vector recall, context compression, relevance scoring, and cross-session sync."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "langchain-anthropic>=1.0",
+    "langgraph>=1.0",
+    "langgraph-checkpoint-sqlite>=3.0",
+    "pydantic>=2.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+memory-agent = "memory_agent.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/memory_agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
