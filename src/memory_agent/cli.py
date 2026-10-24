@@ -24,7 +24,6 @@ def build_agent(
     *,
     max_context_tokens: int = 1200,
     keep_recent: int = 4,
-    confirm_threshold: float | None = None,
 ) -> MemoryAgent:
     """Wire an agent whose memories and session checkpoints live under ``data_dir``."""
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -38,7 +37,6 @@ def build_agent(
         checkpointer,
         max_context_tokens=max_context_tokens,
         keep_recent=keep_recent,
-        confirm_threshold=confirm_threshold,
     )
 
 
@@ -56,8 +54,6 @@ def _show_turn(result: TurnResult) -> None:
         )
     for r in result.learned:
         print(f"   · remembered: {r.text}")
-    for text in result.declined:
-        print(f"   · not saved (declined): {text}")
     if result.compressed:
         print("   · context compressed into summary")
 
@@ -70,12 +66,7 @@ def cmd_chat(args: argparse.Namespace) -> int:
     except LLMError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    agent = build_agent(
-        data_dir,
-        llm,
-        max_context_tokens=settings.max_context_tokens,
-        confirm_threshold=0.95 if args.confirm_sensitive else None,
-    )
+    agent = build_agent(data_dir, llm, max_context_tokens=settings.max_context_tokens)
     session = agent.open_session(args.user, args.session)
     print(f"session {session.session_id} for {args.user} — /memories, /forget <id>, /quit")
     try:
@@ -104,11 +95,6 @@ def cmd_chat(args: argparse.Namespace) -> int:
                 print(f"  error: {exc}")
                 continue
             print(f"agent> {result.reply}")
-            if result.pending_confirmation:
-                print("  save these sensitive memories?")
-                for text in result.pending_confirmation:
-                    print(f"   - {text}")
-                result = session.confirm(input("  [y/N] ").strip().lower() == "y")
             _show_turn(result)
     finally:
         session.close()
@@ -185,15 +171,6 @@ def cmd_demo(args: argparse.Namespace) -> int:
         _banner("5. Isolation: another user sees none of it")
         other = agent.open_session("bob", "bob1")
         _say(other, "Where do I live?")
-
-        _banner("6. Human in the loop: the graph interrupts before saving a sensitive memory")
-        careful = build_agent(data_dir, llm, confirm_threshold=0.95)
-        c = careful.open_session("carol", "c1")
-        print("you> I'm allergic to penicillin.")
-        paused = c.send("I'm allergic to penicillin.")
-        print(f"   · paused for approval: {paused.pending_confirmation}")
-        done = c.confirm(True)
-        _show_turn(done)
     return 0
 
 
@@ -205,11 +182,6 @@ def main(argv: list[str] | None = None) -> int:
     chat.add_argument("--user", default="default")
     chat.add_argument(
         "--session", help="session id; an existing id resumes its saved buffer (default: new)"
-    )
-    chat.add_argument(
-        "--confirm-sensitive",
-        action="store_true",
-        help="pause for approval before saving high-importance memories (e.g. allergies)",
     )
     chat.add_argument("--offline", action="store_true", help="use the rule-based fake model")
     chat.add_argument("--data-dir")

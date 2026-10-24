@@ -12,7 +12,6 @@ def test_demo_runs_offline_and_shows_headline_behaviours(capsys, monkeypatch):
     assert "From what I remember: User lives in Lisbon." in out
     assert "From what I remember: User likes espresso" in out
     assert "=== 5. Isolation" in out and "I don't have anything about that yet." in out
-    assert "paused for approval: ['User is allergic to penicillin']" in out
 
 
 def test_live_demo_without_key_fails_cleanly(capsys, monkeypatch, tmp_path):
@@ -48,14 +47,3 @@ def test_chat_forget_command(capsys, monkeypatch, tmp_path):
     assert "forgotten" in capsys.readouterr().out
     assert not [r for r in mem.all("eve") if r.kind == "fact"]
 
-
-def test_chat_confirm_sensitive_prompts_and_respects_no(capsys, monkeypatch, tmp_path):
-    lines = iter(["I'm allergic to peanuts.", "n", "/memories", "/quit"])
-    monkeypatch.setattr(builtins, "input", lambda _="": next(lines))
-    data = str(tmp_path / "d")
-    assert (
-        main(["chat", "--offline", "--confirm-sensitive", "--user", "fay", "--data-dir", data]) == 0
-    )
-    out = capsys.readouterr().out
-    assert "save these sensitive memories?" in out
-    assert "not saved (declined): User is allergic to peanuts" in out

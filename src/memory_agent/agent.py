@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.types import Command
 
 from .compression import ContextCompressor, estimate_tokens
 from .graph import GraphConfig, build_graph
@@ -25,9 +24,6 @@ class TurnResult:
     recalled: list[ScoredMemory] = field(default_factory=list)
     learned: list[MemoryRecord] = field(default_factory=list)
     compressed: bool = False
-    # Set when the graph paused at the confirmation interrupt: texts awaiting approval.
-    pending_confirmation: list[str] = field(default_factory=list)
-    declined: list[str] = field(default_factory=list)
 
 
 class MemoryAgent:
@@ -43,10 +39,7 @@ class MemoryAgent:
         top_k: int = 5,
         min_score: float = 0.25,
         extract: bool = True,
-        confirm_threshold: float | None = None,
     ) -> None:
-        """``confirm_threshold``: if set, memories at or above this importance pause the graph
-        with an ``interrupt`` until the user approves them (human-in-the-loop)."""
         self.llm = llm
         self.memory = memory
         self.compressor = ContextCompressor(llm)
@@ -62,7 +55,6 @@ class MemoryAgent:
                 top_k=top_k,
                 min_score=min_score,
                 extract=extract,
-                confirm_threshold=confirm_threshold,
             ),
             self.checkpointer,
         )
@@ -110,24 +102,12 @@ class ChatSession:
     # -- turns ------------------------------------------------------------------------------
     def send(self, text: str) -> TurnResult:
         inputs = {"user_id": self.user_id, "session_id": self.session_id, "user_text": text}
-        return self._result(self.agent.graph.invoke(inputs, self._config))
-
-    def confirm(self, approved: bool | list[str]) -> TurnResult:
-        """Resume a turn paused at the confirmation interrupt (True = approve all)."""
-        return self._result(self.agent.graph.invoke(Command(resume=approved), self._config))
-
-    def _result(self, out: dict) -> TurnResult:
-        values = self._values()
-        pending: list[str] = []
-        if out.get("__interrupt__"):
-            pending = list(out["__interrupt__"][0].value["memories"])
+        out = self.agent.graph.invoke(inputs, self._config)
         return TurnResult(
-            reply=values.get("reply", ""),
-            recalled=values.get("recalled", []),
-            learned=values.get("learned", []),
-            compressed=values.get("compressed", False),
-            pending_confirmation=pending,
-            declined=values.get("declined", []),
+            reply=out.get("reply", ""),
+            recalled=out.get("recalled", []),
+            learned=out.get("learned", []),
+            compressed=out.get("compressed", False),
         )
 
     def close(self) -> MemoryRecord | None:
