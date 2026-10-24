@@ -46,4 +46,3 @@ def test_chat_forget_command(capsys, monkeypatch, tmp_path):
     main(["chat", "--offline", "--user", "eve", "--data-dir", data])
     assert "forgotten" in capsys.readouterr().out
     assert not [r for r in mem.all("eve") if r.kind == "fact"]
-

@@ -87,6 +87,23 @@ def test_compaction_shrinks_log_and_other_readers_follow(tmp_path):
     assert {x.text for x in reader.list("u")} == {"v9", "another"}
 
 
+def test_reader_rebuilds_when_a_compacted_log_reuses_the_same_inode(tmp_path):
+    path = tmp_path / "m.jsonl"
+    reader = JsonlMemoryStore(path)
+    forgotten = make("forgotten")
+    reader.upsert(forgotten)
+    assert reader.get(forgotten.id)
+    other = tmp_path / "other.jsonl"
+    writer = JsonlMemoryStore(other)
+    for i in range(5):
+        writer.upsert(make(f"kept-{i}"))
+    writer.compact()
+    with open(path, "r+b") as fh:  # same inode, new generation, larger than the reader's offset
+        fh.write(other.read_bytes())
+        fh.truncate()
+    assert sorted(r.text for r in reader.list("u")) == [f"kept-{i}" for i in range(5)]
+
+
 def test_log_compacts_itself_once_mostly_stale(tmp_path):
     path = tmp_path / "m.jsonl"
     s = JsonlMemoryStore(path, compact_slack=5)

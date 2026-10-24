@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+
 from .embeddings import Embedder, HashingEmbedder, cosine
 from .models import Clock, MemoryKind, MemoryRecord, ScoredMemory, utcnow
 from .scoring import RelevanceScorer
@@ -37,9 +39,9 @@ class LongTermMemory:
         session_id: str | None = None,
     ) -> MemoryRecord:
         """Store a memory. A same-slot memory is replaced; a near-duplicate is reinforced."""
+        vec = self.embedder.embed(text)
         with self.store.transaction():
             now = self.clock()
-            vec = self.embedder.embed(text)
             existing = self.store.list(user_id)
 
             if slot:
@@ -96,9 +98,10 @@ class LongTermMemory:
         reinforce: bool = True,
     ) -> list[ScoredMemory]:
         """Return the memories most relevant to ``query``, best first."""
-        with self.store.transaction():
+        vec = self.embedder.embed(query)
+        with self.store.transaction() if reinforce else contextlib.nullcontext():
             ranked = self.scorer.rank(
-                self.embedder.embed(query),
+                vec,
                 self.store.list(user_id),
                 top_k=top_k,
                 min_score=min_score,

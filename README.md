@@ -72,7 +72,7 @@ The demo walks through five scenes: (1) learning facts while old turns are compr
 
 ## How the tests prove each capability
 
-Run `pytest` (97 tests, ~3 seconds, no network).
+Run `pytest` (98 tests, ~3 seconds, no network).
 
 | Capability | Evidence |
 |---|---|

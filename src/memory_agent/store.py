@@ -14,6 +14,7 @@ import logging
 import os
 import tempfile
 import threading
+import uuid
 from collections.abc import Iterator
 from contextlib import AbstractContextManager
 from pathlib import Path
@@ -27,6 +28,8 @@ except ImportError:  # pragma: no cover
     fcntl = None  # type: ignore[assignment]
 
 log = logging.getLogger(__name__)
+
+_GEN_PREFIX = b'{"op":"gen",'
 
 
 class MemoryStore(Protocol):
@@ -75,7 +78,7 @@ class JsonlMemoryStore:
         self._records: dict[str, MemoryRecord] = {}
         self._offset = 0
         self._ops = 0
-        self._inode: int | None = None
+        self._gen: str | None = None
         self._mutex = threading.RLock()
         self._held = False
 
@@ -103,16 +106,18 @@ class JsonlMemoryStore:
     def _refresh(self) -> None:
         """Replay log lines appended since our last read. Caller holds the lock."""
         try:
-            st = self.path.stat()
+            fh = open(self.path, "rb")
         except FileNotFoundError:
-            self._records, self._offset, self._ops, self._inode = {}, 0, 0, None
+            self._records, self._offset, self._ops, self._gen = {}, 0, 0, None
             return
-        if st.st_ino != self._inode or st.st_size < self._offset:
-            # File was compacted/replaced (or truncated): rebuild from scratch.
-            self._records, self._offset, self._ops, self._inode = {}, 0, 0, st.st_ino
-        if st.st_size == self._offset:
-            return
-        with open(self.path, "rb") as fh:
+        with fh:
+            gen = _generation(fh.readline())
+            size = os.fstat(fh.fileno()).st_size
+            if gen != self._gen or size < self._offset:
+                # File was compacted/replaced (or truncated): rebuild from scratch.
+                self._records, self._offset, self._ops, self._gen = {}, 0, 0, gen
+            if size == self._offset:
+                return
             fh.seek(self._offset)
             data = fh.read()
         end = data.rfind(b"\n") + 1  # ignore a partially written trailing line
@@ -172,7 +177,8 @@ class JsonlMemoryStore:
         return [r.model_copy(deep=True) for r in self._records.values() if r.user_id == user_id]
 
     def compact(self) -> None:
-        """Rewrite the log as one upsert per live record. Other readers detect the new inode."""
+        """Rewrite the log as one upsert per live record under a fresh generation header,
+        which tells other readers to rebuild."""
         with self._locked(exclusive=True):
             self._refresh()
             self._rewrite()
@@ -182,6 +188,7 @@ class JsonlMemoryStore:
         fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=".compact-")
         try:
             with os.fdopen(fd, "wb") as fh:
+                fh.write(_GEN_PREFIX + b'"id":"' + uuid.uuid4().hex.encode() + b'"}\n')
                 for rec in self._records.values():
                     op = {"op": "upsert", "record": json.loads(rec.model_dump_json())}
                     fh.write((json.dumps(op, separators=(",", ":")) + "\n").encode())
@@ -193,3 +200,13 @@ class JsonlMemoryStore:
                 os.unlink(tmp)
             raise
         self._refresh()
+
+
+def _generation(first_line: bytes) -> str | None:
+    """The log's generation id from its header line; ``None`` for a never-compacted log."""
+    if not first_line.startswith(_GEN_PREFIX):
+        return None
+    try:
+        return json.loads(first_line)["id"]
+    except (ValueError, KeyError, TypeError):
+        return None
