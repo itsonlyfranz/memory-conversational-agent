@@ -40,6 +40,13 @@ def test_near_duplicates_are_merged_and_reinforced(memory):
     assert b.importance == 0.7 and b.access_count == 1
 
 
+def test_slotted_duplicate_of_unslotted_memory_adopts_the_slot(memory):
+    memory.remember("alice", "User lives in Berlin")
+    memory.remember("alice", "User lives in Berlin", slot="residence")
+    memory.remember("alice", "User lives in Lisbon", slot="residence")
+    assert [r.text for r in memory.all("alice")] == ["User lives in Lisbon"]
+
+
 def test_distinct_facts_without_slot_coexist(memory):
     memory.remember("a", "User is allergic to peanuts")
     memory.remember("a", "User is allergic to shellfish")

@@ -59,6 +59,7 @@ class GraphConfig(TypedDict):
     top_k: int
     min_score: float
     extract: bool
+    reinforce: bool
 
 
 def build_graph(
@@ -72,7 +73,11 @@ def build_graph(
 
     def recall(state: TurnState) -> dict:
         recalled = memory.recall(
-            state["user_id"], state["user_text"], top_k=cfg["top_k"], min_score=cfg["min_score"]
+            state["user_id"],
+            state["user_text"],
+            top_k=cfg["top_k"],
+            min_score=cfg["min_score"],
+            reinforce=cfg["reinforce"],
         )
         # Reset per-turn scratch so nothing leaks from the previous checkpointed turn.
         return {

@@ -1,4 +1,5 @@
 import multiprocessing as mp
+import threading
 
 from memory_agent.models import MemoryRecord
 from memory_agent.store import InMemoryStore, JsonlMemoryStore
@@ -84,6 +85,32 @@ def test_compaction_shrinks_log_and_other_readers_follow(tmp_path):
     assert path.stat().st_size < before
     writer.upsert(make("another"))
     assert {x.text for x in reader.list("u")} == {"v9", "another"}
+
+
+def test_log_compacts_itself_once_mostly_stale(tmp_path):
+    path = tmp_path / "m.jsonl"
+    s = JsonlMemoryStore(path, compact_slack=5)
+    r = make()
+    for i in range(50):
+        s.upsert(r.model_copy(update={"text": f"v{i}"}))
+    assert len(path.read_bytes().splitlines()) < 10
+    assert JsonlMemoryStore(path).get(r.id).text == "v49"
+
+
+def test_writes_from_another_instance_wait_for_an_open_transaction(tmp_path):
+    path = tmp_path / "m.jsonl"
+    a, b = JsonlMemoryStore(path), JsonlMemoryStore(path)
+    r = make()
+    a.upsert(r)
+    other = threading.Thread(target=b.upsert, args=(r.model_copy(update={"text": "Lisbon"}),))
+    with a.transaction():
+        stale = a.get(r.id)
+        other.start()
+        other.join(0.3)
+        assert other.is_alive()
+        a.upsert(stale.model_copy(update={"access_count": stale.access_count + 1}))
+    other.join(5)
+    assert JsonlMemoryStore(path).get(r.id).text == "Lisbon"
 
 
 def _worker(path, n, tag):

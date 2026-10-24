@@ -15,6 +15,7 @@ import os
 import tempfile
 import threading
 from collections.abc import Iterator
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Protocol
 
@@ -37,8 +38,9 @@ class MemoryStore(Protocol):
 
     def list(self, user_id: str) -> list[MemoryRecord]: ...
 
-    def sync(self) -> None:
-        """Pull in changes made by other sessions/processes (no-op for in-process stores)."""
+    def transaction(self) -> AbstractContextManager[None]:
+        """Hold the store exclusively, with other sessions' changes pulled in, for a
+        read-modify-write that must not interleave with another writer."""
 
 
 class InMemoryStore:
@@ -58,45 +60,56 @@ class InMemoryStore:
     def list(self, user_id: str) -> list[MemoryRecord]:
         return [r.model_copy(deep=True) for r in self._records.values() if r.user_id == user_id]
 
-    def sync(self) -> None:
-        return None
+    def transaction(self) -> AbstractContextManager[None]:
+        return contextlib.nullcontext()
 
 
 class JsonlMemoryStore:
     """Append-only operation log (``upsert`` / ``delete`` lines) replayed into a dict."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, *, compact_slack: int = 1000) -> None:
         self.path = Path(path)
+        self.compact_slack = compact_slack
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock_path = self.path.with_name(self.path.name + ".lock")
         self._records: dict[str, MemoryRecord] = {}
         self._offset = 0
+        self._ops = 0
         self._inode: int | None = None
         self._mutex = threading.RLock()
+        self._held = False
 
     @contextlib.contextmanager
     def _locked(self, exclusive: bool) -> Iterator[None]:
         with self._mutex:
-            if fcntl is None:  # pragma: no cover
+            if fcntl is None or self._held:
                 yield
                 return
             with open(self._lock_path, "a") as fh:
                 fcntl.flock(fh, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+                self._held = True
                 try:
                     yield
                 finally:
+                    self._held = False
                     fcntl.flock(fh, fcntl.LOCK_UN)
+
+    @contextlib.contextmanager
+    def transaction(self) -> Iterator[None]:
+        with self._locked(exclusive=True):
+            self._refresh()
+            yield
 
     def _refresh(self) -> None:
         """Replay log lines appended since our last read. Caller holds the lock."""
         try:
             st = self.path.stat()
         except FileNotFoundError:
-            self._records, self._offset, self._inode = {}, 0, None
+            self._records, self._offset, self._ops, self._inode = {}, 0, 0, None
             return
         if st.st_ino != self._inode or st.st_size < self._offset:
             # File was compacted/replaced (or truncated): rebuild from scratch.
-            self._records, self._offset, self._inode = {}, 0, st.st_ino
+            self._records, self._offset, self._ops, self._inode = {}, 0, 0, st.st_ino
         if st.st_size == self._offset:
             return
         with open(self.path, "rb") as fh:
@@ -105,6 +118,7 @@ class JsonlMemoryStore:
         end = data.rfind(b"\n") + 1  # ignore a partially written trailing line
         for line in data[:end].splitlines():
             self._apply(line)
+            self._ops += 1
         self._offset += end
 
     def _apply(self, line: bytes) -> None:
@@ -121,11 +135,15 @@ class JsonlMemoryStore:
             log.warning("skipping corrupt memory log line: %r", line[:80])
 
     def _append(self, op: dict) -> None:
+        """Append one op under the exclusive lock, compacting once the log is mostly stale."""
         line = json.dumps(op, separators=(",", ":"), default=str) + "\n"
         with open(self.path, "ab") as fh:
             fh.write(line.encode())
             fh.flush()
             os.fsync(fh.fileno())
+        self._refresh()
+        if self._ops > 2 * len(self._records) + self.compact_slack:
+            self._rewrite()
 
     def sync(self) -> None:
         with self._locked(exclusive=False):
@@ -135,7 +153,6 @@ class JsonlMemoryStore:
         with self._locked(exclusive=True):
             self._refresh()
             self._append({"op": "upsert", "record": json.loads(record.model_dump_json())})
-            self._refresh()
 
     def delete(self, memory_id: str) -> bool:
         with self._locked(exclusive=True):
@@ -143,7 +160,6 @@ class JsonlMemoryStore:
             existed = memory_id in self._records
             if existed:
                 self._append({"op": "delete", "id": memory_id})
-                self._refresh()
             return existed
 
     def get(self, memory_id: str) -> MemoryRecord | None:
@@ -159,17 +175,21 @@ class JsonlMemoryStore:
         """Rewrite the log as one upsert per live record. Other readers detect the new inode."""
         with self._locked(exclusive=True):
             self._refresh()
-            fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=".compact-")
-            try:
-                with os.fdopen(fd, "wb") as fh:
-                    for rec in self._records.values():
-                        op = {"op": "upsert", "record": json.loads(rec.model_dump_json())}
-                        fh.write((json.dumps(op, separators=(",", ":")) + "\n").encode())
-                    fh.flush()
-                    os.fsync(fh.fileno())
-                os.replace(tmp, self.path)
-            except BaseException:
-                with contextlib.suppress(FileNotFoundError):
-                    os.unlink(tmp)
-                raise
-            self._refresh()
+            self._rewrite()
+
+    def _rewrite(self) -> None:
+        """Caller holds the exclusive lock and has just refreshed."""
+        fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=".compact-")
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                for rec in self._records.values():
+                    op = {"op": "upsert", "record": json.loads(rec.model_dump_json())}
+                    fh.write((json.dumps(op, separators=(",", ":")) + "\n").encode())
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, self.path)
+        except BaseException:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(tmp)
+            raise
+        self._refresh()

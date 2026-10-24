@@ -30,6 +30,14 @@ def test_extract_branch_is_skipped_when_disabled(memory):
     assert len(s.messages) == 2
 
 
+def test_reinforce_can_be_disabled_on_the_agent(memory):
+    r = memory.remember("alice", "User lives in Berlin")
+    agent = MemoryAgent(HeuristicLLM(), memory, extract=False, reinforce=False)
+    s = agent.open_session("alice", "s")
+    assert s.send("Where do I live?").recalled
+    assert memory.store.get(r.id).access_count == 0
+
+
 def test_per_turn_scratch_does_not_leak_between_turns(agent):
     s = agent.open_session("alice", "s")
     assert s.send("I live in Berlin.").learned

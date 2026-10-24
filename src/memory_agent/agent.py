@@ -39,6 +39,7 @@ class MemoryAgent:
         top_k: int = 5,
         min_score: float = 0.25,
         extract: bool = True,
+        reinforce: bool = True,
     ) -> None:
         self.llm = llm
         self.memory = memory
@@ -55,6 +56,7 @@ class MemoryAgent:
                 top_k=top_k,
                 min_score=min_score,
                 extract=extract,
+                reinforce=reinforce,
             ),
             self.checkpointer,
         )

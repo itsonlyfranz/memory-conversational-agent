@@ -26,7 +26,7 @@ A LangGraph conversational agent that remembers its users: a token-budgeted shor
 | `LongTermMemory` | `memory.py` | Embeds, deduplicates, supersedes by slot, recalls, reinforces, forgets, and evicts the least valuable memories at capacity. Strictly per-user. |
 | `RelevanceScorer` | `scoring.py` | Weighted blend of similarity, recency (half-life that grows with importance), importance and saturating frequency; exposes every component. |
 | `HashingEmbedder` | `embeddings.py` | Local, deterministic embeddings (stemmed unigrams, bigrams, char trigrams hashed into 512 dims). Behind an `Embedder` protocol. |
-| `JsonlMemoryStore` / `InMemoryStore` | `store.py` | Persistence behind a `MemoryStore` protocol. The JSONL store tails other writers' appends under `flock`, and can compact. |
+| `JsonlMemoryStore` / `InMemoryStore` | `store.py` | Persistence behind a `MemoryStore` protocol. The JSONL store tails other writers' appends under `flock`, runs read-modify-writes in an exclusive `transaction()`, and compacts itself once the log is mostly stale. |
 | Checkpointer | `cli.py` / LangGraph | `SqliteSaver` (local file) persists each session's buffer; re-opening a session id resumes it. `ids.py` validates ids against path traversal. |
 | `LLMClient` / `AnthropicClient` | `llm.py` | Two-method protocol; `AnthropicClient` wraps `langchain_anthropic.ChatAnthropic`. The only place the network is touched. `fakes.py` provides `HeuristicLLM` and `ScriptedLLM` for offline runs. |
 
@@ -62,7 +62,7 @@ The demo walks through five scenes: (1) learning facts while old turns are compr
 
 - **Local hashing embeddings instead of a model or hosted vector DB.** Zero setup and deterministic tests. The cost is that it matches words, not meaning: on my 10-question benchmark recall@1 is 7/10, and the misses are pure paraphrases ("what outdoor activity do I enjoy?" vs "hiking"). Swap in a real embedder through the `Embedder` protocol; scoring, storage and tests are unchanged.
 - **Brute-force cosine search.** O(n) per user, fine for the hundreds of memories a per-user cap allows (`max_per_user`, default 500); an ANN index would be the next step at scale.
-- **Append-only JSONL + advisory file locks for sync.** Simple, inspectable, crash-tolerant (partial and corrupt lines are skipped), and needs no server. It is POSIX-oriented, last-writer-wins per memory, and meant for one machine, not a distributed deployment.
+- **Append-only JSONL + advisory file locks for sync.** Simple, inspectable, crash-tolerant (partial and corrupt lines are skipped), and needs no server. It is POSIX-oriented, serializes each remember/recall/forget under an exclusive lock, and meant for one machine, not a distributed deployment.
 - **Slots for contradiction handling.** The extractor labels single-valued attributes, so updates are deterministic rather than relying on the model to notice a conflict later. Facts with no slot rely on near-duplicate merging.
 - **LangGraph where it fits, not everywhere.** Parallel branches (extraction does not wait on buffer compression, and a conditional edge skips it when disabled) and a checkpointer (session resume) each replace hand-rolled code. The graph is acyclic; no agent tool loop is faked in. The LLM stays behind a two-method protocol rather than being passed as a LangChain model, so tests need no LangChain fakes.
 - **Similarity gate before blending.** Importance, recency and frequency only re-rank topically relevant memories.
@@ -72,7 +72,7 @@ The demo walks through five scenes: (1) learning facts while old turns are compr
 
 ## How the tests prove each capability
 
-Run `pytest` (93 tests, ~3 seconds, no network).
+Run `pytest` (97 tests, ~3 seconds, no network).
 
 | Capability | Evidence |
 |---|---|
